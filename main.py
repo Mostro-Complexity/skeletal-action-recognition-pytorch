@@ -38,12 +38,15 @@ def same_padding(input, kernel_size, stride=None, dilation=1):
 
 
 class TrainableModule(metaclass=ABCMeta):
-    def __init__(self, training=False, batch_size=32):
-        self.training = training
+    def __init__(self, path=None, batch_size=32):
+        self.path = path
         self.batch_size = batch_size
         self.train_loader = None
         self.test_loader = None
         self.n_steps = 0
+
+        if self.path is not None:
+            self = torch.load(path)
 
     def set_dataloder(self, method, data_loader):
         if method == 'train':
@@ -76,10 +79,10 @@ class TrainableModule(metaclass=ABCMeta):
 
 
 class ActionConvNet(torch.nn.Module, TrainableModule):
-    def __init__(self, training=False):
+    def __init__(self, path=None, regular_lambda=1e-2):
         torch.nn.Module.__init__(self)
-        TrainableModule.__init__(self, training=training)
-
+        TrainableModule.__init__(self, path=path)
+        self.regular_lambda = regular_lambda
         self.conv1 = Conv2d(in_channels=3,
                             out_channels=32,
                             kernel_size=3,
@@ -150,7 +153,7 @@ class ActionConvNet(torch.nn.Module, TrainableModule):
     def train_module(self, epochs):
         for epoch in range(epochs):
             self.train(True)
-            running_loss = 0.0
+            train_loss = 0.0
             n_correct_preds, n_total_preds = 0, 0
             for i, data in enumerate(self.train_loader, 0):
                 inputs, labels = data
@@ -162,21 +165,23 @@ class ActionConvNet(torch.nn.Module, TrainableModule):
                 outputs = torch.argmax(categorical_outputs, 1)
 
                 loss = self.criterion(categorical_outputs, labels)
+                loss += self.regular_lambda*(torch.norm(self.fc1.weight, p=2) +
+                                             torch.norm(self.fc2.weight, p=2))
                 loss.backward()
                 self.optimizer.step()
 
                 # print statistics
-                running_loss += loss.item()
+                train_loss += loss.item()
                 n_correct_preds += torch.sum(labels == outputs).item()
                 n_total_preds += labels.numel()
                 total_accuracy = n_correct_preds / n_total_preds
 
                 if i % self.n_steps == self.n_steps-1:    # print every 2000 mini-batches
                     self.show_statistics(
-                        'train', epoch, running_loss, total_accuracy)
-                    running_loss = 0.0
+                        'train', epoch, train_loss, total_accuracy)
+                    train_loss = 0.0
 
-            self.show_statistics('both', epoch, running_loss, total_accuracy)
+            self.show_statistics('both', epoch, train_loss, total_accuracy)
 
         print('Finished Training')
 
@@ -217,7 +222,7 @@ class ActionConvNet(torch.nn.Module, TrainableModule):
         pass
 
     def save_module(self, path):
-        pass
+        torch.save(self, path)
 
 
 if __name__ == "__main__":
@@ -232,7 +237,7 @@ if __name__ == "__main__":
         dataset=train_data, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(dataset=test_data, batch_size=batch_size)
 
-    convnet = ActionConvNet(training=True)
+    convnet = ActionConvNet()
     print(convnet)
 
     convnet.set_dataloder('train', train_loader)
@@ -241,3 +246,4 @@ if __name__ == "__main__":
     convnet.set_optimizer(SGD(convnet.parameters(),
                               lr=0.01, momentum=0.9, weight_decay=1e-4, nesterov=True))
     convnet.train_module(epochs=100)
+    convnet.save_module('model/rbg_mapping.pth')
